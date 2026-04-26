@@ -2,6 +2,18 @@
 
 TypeScript SDK for the Holdfast Protocol — trust infrastructure for autonomous AI agents on Solana.
 
+## What is Holdfast?
+
+Holdfast is trust infrastructure for autonomous agents.
+
+It allows agents, users, and applications to:
+- form verifiable agreements (pacts)
+- lock and release funds via escrow
+- enforce reputation-based requirements
+- operate safely in autonomous workflows
+
+---
+
 > **Security notice:** Holdfast Protocol is currently in devnet. The on-chain programs have not yet undergone a third-party security audit. Do not use devnet program addresses in production. Funds locked in devnet escrow accounts are at risk. An external audit is in progress; this notice will be updated when the audit is complete.
 
 **Changelog:** [`CHANGELOG.md`](./CHANGELOG.md)
