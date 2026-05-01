@@ -6,9 +6,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/casematelabs/sdk.git"
+    "url": "git+https://github.com/casematelabs/holdfastprotocol-sdk.git"
   },
-  "homepage": "https://github.com/casematelabs/sdk#readme",
+  "homepage": "https://github.com/casematelabs/holdfastprotocol-sdk#readme",
   "exports": {
     ".": {
       "import": {
