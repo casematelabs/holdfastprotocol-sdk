@@ -90,7 +90,7 @@ async function printReputation(label: string, pubkey: PublicKey, client: ReturnT
     console.log(`  ${label}: score=${rep.score}bp (${pct}%)  tier=${TIER_LABEL[rep.tier]}  pacts=${rep.totalPacts}  disputes=${rep.disputeCount}`);
   } catch (e) {
     if (e instanceof ReputationNotFoundError) {
-      console.log(`  ${label}: no ReputationAccount yet (first pact sign creates it)`);
+      console.log(`  ${label}: no ReputationAccount yet (initialize via init_reputation first)`);
     } else throw e;
   }
 }

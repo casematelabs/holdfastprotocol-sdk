@@ -11,6 +11,8 @@ import { sendAndConfirmWithRetry } from "../resilience.js";
 import type {
   EscrowAccount,
   EscrowStatus,
+  EscrowEventPage,
+  GetEscrowEventsOptions,
   ListPactsOptions,
   PactPage,
   ReleaseCondition,
@@ -21,16 +23,16 @@ import { IndexerRequestError } from "../reputation/index.js";
 
 // ── Program IDs ───────────────────────────────────────────────────────
 const DEVNET_ESCROW_PROGRAM_ID = new PublicKey(
-  "BNxA76z6vjQYtUJXGpH8qjA3wHvtAAqGqL6rvVWH6b3H",
+  "CAZMkHiExVjbsSwAVBYVhz1yaHmnBSvzUYGaQrrRp6yi",
 );
 const DEVNET_HOLDFAST_PROGRAM_ID = new PublicKey(
-  "D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg",
+  "2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq",
 );
 const TOKEN_PROGRAM_ID = new PublicKey(
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
 );
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bL",
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
 );
 const DEFAULT_PUBKEY = new PublicKey(new Uint8Array(32));
 
@@ -398,60 +400,251 @@ export class EscrowModule {
     const initiatorMinTier = params.reputationThreshold?.minTier ?? VerifTier.Unverified;
     const initiatorMinPacts = BigInt(params.reputationThreshold?.minPacts ?? 0);
 
-    const data = new BorshWriter()
-      .fixedBytes(DISC_INITIALIZE_ESCROW, 8)
-      .fixedBytes(escrowId, 32)
-      .fixedBytes(params.counterparty.toBuffer(), 32)
-      .fixedBytes(arbiter.toBuffer(), 32)
-      .u64(params.amount)
-      .u64(initiatorStake)
-      .u64(beneficiaryStake)
-      .i64(timeLockExpiresAt)
-      .fixedBytes(deliverablesHash, 32)
-      .fixedBytes(deliverablesUri, 128)
-      .bool(autoReleaseOnExpiry)
-      .bool(slashLoserStake)
-      .i64(disputeDeadlineSecs)
-      .u64(initiatorReputationMin)
-      .u64(0n) // beneficiary_reputation_min: not exposed in v0.1 API
-      .u8(initiatorMinTier)
-      .u64(initiatorMinPacts)
-      .u8(0) // beneficiary_min_tier: not exposed in v0.1 API
-      .u64(0n) // beneficiary_min_pacts: not exposed in v0.1 API
-      .build();
-
     if (params.arbiter && !params.arbiterWallet) {
       throw new EscrowArbiterWalletRequiredError();
     }
     const arbiterWallet = params.arbiterWallet ?? agentWallet;
 
-    const ix = new TransactionInstruction({
-      programId: this.programId,
-      data,
-      keys: [
-        { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-        { pubkey: escrowPda, isSigner: false, isWritable: true },
-        { pubkey: pactPda, isSigner: false, isWritable: true },
-        { pubkey: params.mint, isSigner: false, isWritable: false },
-        { pubkey: vault, isSigner: false, isWritable: true },
-        { pubkey: initiatorReputationPda, isSigner: false, isWritable: false },
-        { pubkey: agentWallet, isSigner: false, isWritable: false },
-        { pubkey: params.counterpartyWallet, isSigner: false, isWritable: false },
-        { pubkey: arbiterWallet, isSigner: false, isWritable: false },
-        { pubkey: this.holdfastProgramId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ],
-    });
+    const initLayouts = [
+      {
+        data: this.buildInitializeEscrowData({
+          escrowId,
+          beneficiary: params.counterparty,
+          arbiter,
+          amount: params.amount,
+          initiatorStake,
+          beneficiaryStake,
+          timeLockExpiresAt,
+          deliverablesHash,
+          deliverablesUri,
+          autoReleaseOnExpiry,
+          slashLoserStake,
+          disputeDeadlineSecs,
+          initiatorReputationMin,
+          initiatorMinTier,
+          initiatorMinPacts,
+          includeBeneficiaryMin: true,
+          includeBeneficiaryTierAndPacts: true,
+        }),
+        keys: this.buildInitializeEscrowKeys({
+          signer: signer.publicKey,
+          escrowPda,
+          pactPda,
+          mint: params.mint,
+          vault,
+          initiatorReputationPda,
+          initiatorWallet: agentWallet,
+          beneficiaryWallet: params.counterpartyWallet,
+          arbiterWallet,
+          includePactRecord: true,
+        }),
+      },
+      {
+        data: this.buildInitializeEscrowData({
+          escrowId,
+          beneficiary: params.counterparty,
+          arbiter,
+          amount: params.amount,
+          initiatorStake,
+          beneficiaryStake,
+          timeLockExpiresAt,
+          deliverablesHash,
+          deliverablesUri,
+          autoReleaseOnExpiry,
+          slashLoserStake,
+          disputeDeadlineSecs,
+          initiatorReputationMin,
+          initiatorMinTier,
+          initiatorMinPacts,
+          includeBeneficiaryMin: true,
+          includeBeneficiaryTierAndPacts: false,
+        }),
+        keys: this.buildInitializeEscrowKeys({
+          signer: signer.publicKey,
+          escrowPda,
+          pactPda,
+          mint: params.mint,
+          vault,
+          initiatorReputationPda,
+          initiatorWallet: agentWallet,
+          beneficiaryWallet: params.counterpartyWallet,
+          arbiterWallet,
+          includePactRecord: true,
+        }),
+      },
+      {
+        data: this.buildInitializeEscrowData({
+          escrowId,
+          beneficiary: params.counterparty,
+          arbiter,
+          amount: params.amount,
+          initiatorStake,
+          beneficiaryStake,
+          timeLockExpiresAt,
+          deliverablesHash,
+          deliverablesUri,
+          autoReleaseOnExpiry,
+          slashLoserStake,
+          disputeDeadlineSecs,
+          initiatorReputationMin,
+          initiatorMinTier,
+          initiatorMinPacts,
+          includeBeneficiaryMin: false,
+          includeBeneficiaryTierAndPacts: false,
+        }),
+        keys: this.buildInitializeEscrowKeys({
+          signer: signer.publicKey,
+          escrowPda,
+          pactPda,
+          mint: params.mint,
+          vault,
+          initiatorReputationPda,
+          initiatorWallet: agentWallet,
+          beneficiaryWallet: params.counterpartyWallet,
+          arbiterWallet,
+          includePactRecord: true,
+        }),
+      },
+      {
+        data: this.buildInitializeEscrowData({
+          escrowId,
+          beneficiary: params.counterparty,
+          arbiter,
+          amount: params.amount,
+          initiatorStake,
+          beneficiaryStake,
+          timeLockExpiresAt,
+          deliverablesHash,
+          deliverablesUri,
+          autoReleaseOnExpiry,
+          slashLoserStake,
+          disputeDeadlineSecs,
+          initiatorReputationMin,
+          initiatorMinTier,
+          initiatorMinPacts,
+          includeBeneficiaryMin: false,
+          includeBeneficiaryTierAndPacts: false,
+        }),
+        keys: this.buildInitializeEscrowKeys({
+          signer: signer.publicKey,
+          escrowPda,
+          pactPda,
+          mint: params.mint,
+          vault,
+          initiatorReputationPda,
+          initiatorWallet: agentWallet,
+          beneficiaryWallet: params.counterpartyWallet,
+          arbiterWallet,
+          includePactRecord: false,
+        }),
+      },
+    ];
 
-    const tx = new Transaction().add(ix);
-    tx.feePayer = signer.publicKey;
-    await sendAndConfirmWithRetry(this.connection, tx, [signer]);
+    let sent = false;
+    let lastErr: unknown = undefined;
+    for (const [i, layout] of initLayouts.entries()) {
+      const ix = new TransactionInstruction({
+        programId: this.programId,
+        data: layout.data,
+        keys: layout.keys,
+      });
+      const tx = new Transaction().add(ix);
+      tx.feePayer = signer.publicKey;
+      try {
+        await sendAndConfirmWithRetry(this.connection, tx, [signer]);
+        sent = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (i === initLayouts.length - 1 || !isInitializeEscrowCompatibilityError(err)) {
+          throw err;
+        }
+      }
+    }
+    if (!sent && lastErr) throw lastErr;
 
     const info = await this.connection.getAccountInfo(escrowPda);
     if (info === null) throw new EscrowNotFoundError(escrowPda.toBase58());
     return deserializeEscrowAccount(escrowPda, Buffer.from(info.data));
+  }
+
+  private buildInitializeEscrowData(args: {
+    escrowId: Uint8Array;
+    beneficiary: PublicKey;
+    arbiter: PublicKey;
+    amount: bigint;
+    initiatorStake: bigint;
+    beneficiaryStake: bigint;
+    timeLockExpiresAt: bigint;
+    deliverablesHash: Uint8Array;
+    deliverablesUri: Uint8Array;
+    autoReleaseOnExpiry: boolean;
+    slashLoserStake: boolean;
+    disputeDeadlineSecs: bigint;
+    initiatorReputationMin: bigint;
+    initiatorMinTier: number;
+    initiatorMinPacts: bigint;
+    includeBeneficiaryMin: boolean;
+    includeBeneficiaryTierAndPacts: boolean;
+  }): Buffer {
+    const writer = new BorshWriter()
+      .fixedBytes(DISC_INITIALIZE_ESCROW, 8)
+      .fixedBytes(args.escrowId, 32)
+      .fixedBytes(args.beneficiary.toBuffer(), 32)
+      .fixedBytes(args.arbiter.toBuffer(), 32)
+      .u64(args.amount)
+      .u64(args.initiatorStake)
+      .u64(args.beneficiaryStake)
+      .i64(args.timeLockExpiresAt)
+      .fixedBytes(args.deliverablesHash, 32)
+      .fixedBytes(args.deliverablesUri, 128)
+      .bool(args.autoReleaseOnExpiry)
+      .bool(args.slashLoserStake)
+      .i64(args.disputeDeadlineSecs)
+      .u64(args.initiatorReputationMin);
+
+    if (args.includeBeneficiaryMin) {
+      writer.u64(0n); // beneficiary_reputation_min not exposed in SDK API.
+    }
+    writer.u8(args.initiatorMinTier).u64(args.initiatorMinPacts);
+    if (args.includeBeneficiaryTierAndPacts) {
+      writer.u8(0).u64(0n); // beneficiary_min_tier / beneficiary_min_pacts
+    }
+    return writer.build();
+  }
+
+  private buildInitializeEscrowKeys(args: {
+    signer: PublicKey;
+    escrowPda: PublicKey;
+    pactPda: PublicKey;
+    mint: PublicKey;
+    vault: PublicKey;
+    initiatorReputationPda: PublicKey;
+    initiatorWallet: PublicKey;
+    beneficiaryWallet: PublicKey;
+    arbiterWallet: PublicKey;
+    includePactRecord: boolean;
+  }): Array<{ pubkey: PublicKey; isSigner: boolean; isWritable: boolean }> {
+    const keys: Array<{ pubkey: PublicKey; isSigner: boolean; isWritable: boolean }> = [
+      { pubkey: args.signer, isSigner: true, isWritable: true },
+      { pubkey: args.escrowPda, isSigner: false, isWritable: true },
+    ];
+    if (args.includePactRecord) {
+      keys.push({ pubkey: args.pactPda, isSigner: false, isWritable: true });
+    }
+    keys.push(
+      { pubkey: args.mint, isSigner: false, isWritable: false },
+      { pubkey: args.vault, isSigner: false, isWritable: true },
+      { pubkey: args.initiatorReputationPda, isSigner: false, isWritable: false },
+      { pubkey: args.initiatorWallet, isSigner: false, isWritable: false },
+      { pubkey: args.beneficiaryWallet, isSigner: false, isWritable: false },
+      { pubkey: args.arbiterWallet, isSigner: false, isWritable: false },
+      { pubkey: this.holdfastProgramId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    );
+    return keys;
   }
 
   /**
@@ -573,7 +766,6 @@ export class EscrowModule {
     arbiterWallet?: PublicKey,
   ): Promise<Transaction> {
     const agentWallet = this.requireAgentWallet();
-    const resolvedArbiterWallet = arbiterWallet ?? agentWallet;
 
     const escrowIdBytes = escrowId.toBuffer();
     const escrowPda = deriveEscrowPda(escrowIdBytes, this.programId);
@@ -585,7 +777,14 @@ export class EscrowModule {
 
     const initiatorPubkey = new PublicKey(escrow.initiator);
     const beneficiaryPubkey = new PublicKey(escrow.beneficiary);
+    const arbiterPubkey = new PublicKey(escrow.arbiter);
     const vault = new PublicKey(escrow.vault);
+    const resolvedArbiterWallet = arbiterPubkey.equals(DEFAULT_PUBKEY)
+      ? (arbiterWallet ?? agentWallet)
+      : (arbiterWallet ?? null);
+    if (resolvedArbiterWallet === null) {
+      throw new EscrowLockArbiterWalletRequiredError(arbiterPubkey.toBase58());
+    }
     const initiatorReputationPda = deriveReputationPda(initiatorPubkey, this.holdfastProgramId);
     const beneficiaryReputationPda = deriveReputationPda(beneficiaryPubkey, this.holdfastProgramId);
 
@@ -667,6 +866,10 @@ export class EscrowModule {
     const escrowIdBytes = escrowId.toBuffer();
     const escrowPda = deriveEscrowPda(escrowIdBytes, this.programId);
     const pactPda = derivePactPda(escrowIdBytes, this.programId);
+    const info = await this.connection.getAccountInfo(escrowPda);
+    if (info === null) throw new EscrowNotFoundError(escrowPda.toBase58());
+    const escrow = deserializeEscrowAccount(escrowPda, Buffer.from(info.data));
+    const vault = new PublicKey(escrow.vault);
 
     const ix = new TransactionInstruction({
       programId: this.programId,
@@ -676,6 +879,7 @@ export class EscrowModule {
         { pubkey: escrowPda, isSigner: false, isWritable: true },
         { pubkey: pactPda, isSigner: false, isWritable: false },
         { pubkey: agentWallet, isSigner: false, isWritable: false },
+        { pubkey: vault, isSigner: false, isWritable: false },
       ],
     });
 
@@ -775,6 +979,14 @@ export class EscrowModule {
     const escrowPda = deriveEscrowPda(escrowIdBytes, this.programId);
     const pactPda = derivePactPda(escrowIdBytes, this.programId);
     const disputePda = deriveDisputePda(escrowIdBytes, this.programId);
+    const info = await this.connection.getAccountInfo(escrowPda);
+    if (info === null) throw new EscrowNotFoundError(escrowPda.toBase58());
+    const escrow = deserializeEscrowAccount(escrowPda, Buffer.from(info.data));
+
+    const mint = new PublicKey(escrow.mint);
+    const vault = new PublicKey(escrow.vault);
+    const beneficiaryAta = deriveAta(new PublicKey(escrow.beneficiary), mint);
+    const initiatorAta = deriveAta(new PublicKey(escrow.initiator), mint);
 
     // RaiseDisputeParams Borsh layout: evidence_hash [u8;32], evidence_uri [u8;128]
     const data = new BorshWriter()
@@ -791,6 +1003,9 @@ export class EscrowModule {
         { pubkey: escrowPda, isSigner: false, isWritable: true },
         { pubkey: pactPda, isSigner: false, isWritable: false },
         { pubkey: disputePda, isSigner: false, isWritable: true },
+        { pubkey: vault, isSigner: false, isWritable: false },
+        { pubkey: beneficiaryAta, isSigner: false, isWritable: false },
+        { pubkey: initiatorAta, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
     });
@@ -961,8 +1176,20 @@ export class EscrowModule {
 
     const mint = new PublicKey(escrow.mint);
     const vault = new PublicKey(escrow.vault);
-    const initiatorAta = deriveAta(signer.publicKey, mint);
+    const initiatorAta = deriveAta(new PublicKey(escrow.initiator), mint);
     const beneficiaryAta = deriveAta(new PublicKey(escrow.beneficiary), mint);
+    const initiatorReputationPda = deriveReputationPda(
+      new PublicKey(escrow.initiator),
+      this.holdfastProgramId,
+    );
+    const beneficiaryReputationPda = deriveReputationPda(
+      new PublicKey(escrow.beneficiary),
+      this.holdfastProgramId,
+    );
+    const [escrowAuthorityPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vp_escrow_authority")],
+      this.programId,
+    );
 
     const ix = new TransactionInstruction({
       programId: this.programId,
@@ -974,6 +1201,10 @@ export class EscrowModule {
         { pubkey: initiatorAta, isSigner: false, isWritable: true },
         { pubkey: beneficiaryAta, isSigner: false, isWritable: true },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: initiatorReputationPda, isSigner: false, isWritable: true },
+        { pubkey: beneficiaryReputationPda, isSigner: false, isWritable: true },
+        { pubkey: escrowAuthorityPda, isSigner: false, isWritable: false },
+        { pubkey: this.holdfastProgramId, isSigner: false, isWritable: false },
       ],
     });
 
@@ -1027,6 +1258,30 @@ export class EscrowModule {
     return res.json() as Promise<PactPage>;
   }
 
+  /**
+   * List escrow lifecycle events for a specific escrow via the off-chain indexer.
+   * Calls `GET /v1/escrows/:escrow/events`.
+   */
+  async getEscrowEvents(
+    escrowId: PublicKey | string,
+    opts: GetEscrowEventsOptions = {},
+  ): Promise<EscrowEventPage> {
+    const escrowStr = typeof escrowId === "string" ? escrowId : escrowId.toBase58();
+    const limit = Math.min(opts.limit ?? 50, 200);
+
+    const url = new URL(`/v1/escrows/${escrowStr}/events`, this.indexerUrl);
+    url.searchParams.set("limit", String(limit));
+    if (opts.before !== undefined) {
+      url.searchParams.set("before", opts.before);
+    }
+
+    const res = await fetch(url.toString());
+    if (!res.ok) {
+      throw new IndexerRequestError(res.status, await res.text());
+    }
+    return res.json() as Promise<EscrowEventPage>;
+  }
+
   private requireSigner(): Signer {
     if (!this.signer) throw new EscrowSignerRequiredError();
     return this.signer;
@@ -1036,6 +1291,17 @@ export class EscrowModule {
     if (!this.agentWallet) throw new EscrowAgentWalletRequiredError();
     return this.agentWallet;
   }
+}
+
+function isInitializeEscrowCompatibilityError(err: unknown): boolean {
+  const pattern =
+    /(invalid instruction data|instruction.*fallback not found|not enough account keys|failed to deserialize|AccountNotEnoughKeys|InstructionDidNotDeserialize)/i;
+  let current: unknown = err;
+  while (current instanceof Error) {
+    if (pattern.test(current.message)) return true;
+    current = (current as Error & { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 // ── Errors ────────────────────────────────────────────────────────────
@@ -1088,6 +1354,16 @@ export class EscrowAgentWalletRequiredError extends Error {
         "on the holdfast program.",
     );
     this.name = "EscrowAgentWalletRequiredError";
+  }
+}
+
+export class EscrowLockArbiterWalletRequiredError extends Error {
+  constructor(readonly arbiterPubkey: string) {
+    super(
+      "lockEscrow requires an explicit arbiterWallet when the escrow was created " +
+        `with arbiter=${arbiterPubkey}. Pass arbiterWallet to lockEscrow/buildLockEscrowTransaction.`,
+    );
+    this.name = "EscrowLockArbiterWalletRequiredError";
   }
 }
 

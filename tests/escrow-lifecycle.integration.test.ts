@@ -15,7 +15,7 @@ import type { ReputationModule } from "../src/reputation/index.js";
 const ESCROW_PROGRAM_ID = new PublicKey("BNxA76z6vjQYtUJXGpH8qjA3wHvtAAqGqL6rvVWH6b3H");
 const HOLDFAST_PROGRAM_ID = new PublicKey("D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg");
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bL");
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 function disc(name: string): Buffer {
   return Buffer.from(createHash("sha256").update(`global:${name}`).digest()).subarray(0, 8);
@@ -55,6 +55,49 @@ function deriveRepPda(agent: PublicKey): PublicKey {
     HOLDFAST_PROGRAM_ID,
   );
   return pda;
+}
+
+function decodeInitializeEscrowPayload(data: Buffer) {
+  let o = 8; // skip discriminator
+  const escrowId = data.subarray(o, o + 32); o += 32;
+  const beneficiary = new PublicKey(data.subarray(o, o + 32)); o += 32;
+  const arbiter = new PublicKey(data.subarray(o, o + 32)); o += 32;
+  const escrowAmount = data.readBigUInt64LE(o); o += 8;
+  const initiatorStake = data.readBigUInt64LE(o); o += 8;
+  const beneficiaryStake = data.readBigUInt64LE(o); o += 8;
+  const timeLockExpiresAt = data.readBigInt64LE(o); o += 8;
+  const deliverablesHash = data.subarray(o, o + 32); o += 32;
+  const deliverablesUri = data.subarray(o, o + 128); o += 128;
+  const autoReleaseOnExpiry = data.readUInt8(o) === 1; o += 1;
+  const slashLoserStake = data.readUInt8(o) === 1; o += 1;
+  const disputeDeadlineSecs = data.readBigInt64LE(o); o += 8;
+  const initiatorReputationMin = data.readBigUInt64LE(o); o += 8;
+  const beneficiaryReputationMin = data.readBigUInt64LE(o); o += 8;
+  const initiatorMinTier = data.readUInt8(o); o += 1;
+  const initiatorMinPacts = data.readBigUInt64LE(o); o += 8;
+  const beneficiaryMinTier = data.readUInt8(o); o += 1;
+  const beneficiaryMinPacts = data.readBigUInt64LE(o); o += 8;
+  return {
+    cursor: o,
+    escrowId,
+    beneficiary,
+    arbiter,
+    escrowAmount,
+    initiatorStake,
+    beneficiaryStake,
+    timeLockExpiresAt,
+    deliverablesHash,
+    deliverablesUri,
+    autoReleaseOnExpiry,
+    slashLoserStake,
+    disputeDeadlineSecs,
+    initiatorReputationMin,
+    beneficiaryReputationMin,
+    initiatorMinTier,
+    initiatorMinPacts,
+    beneficiaryMinTier,
+    beneficiaryMinPacts,
+  };
 }
 
 function buildEscrowAccountData(params: {
@@ -129,6 +172,32 @@ class FakeConnection {
       owner: ESCROW_PROGRAM_ID,
       rentEpoch: 0,
     };
+  }
+}
+
+class CompatFallbackConnection extends FakeConnection {
+  private callCount = 0;
+
+  override async sendTransaction(tx: Transaction, signers: Signer[]): Promise<string> {
+    this.callCount += 1;
+    if (this.callCount === 1) {
+      this.sent.push({ tx, signers });
+      throw new Error("InstructionDidNotDeserialize");
+    }
+    return super.sendTransaction(tx, signers);
+  }
+}
+
+class CompatFallbackConnectionThirdAttempt extends FakeConnection {
+  private callCount = 0;
+
+  override async sendTransaction(tx: Transaction, signers: Signer[]): Promise<string> {
+    this.callCount += 1;
+    if (this.callCount <= 2) {
+      this.sent.push({ tx, signers });
+      throw new Error("InstructionDidNotDeserialize");
+    }
+    return super.sendTransaction(tx, signers);
   }
 }
 
@@ -226,8 +295,42 @@ describe("Escrow SDK lifecycle integration", async () => {
 
     const createIx = conn.sent[0].tx.instructions[0];
     assert.deepEqual(createIx.data.subarray(0, 8), disc("initialize_escrow"));
-    assert.ok(createIx.keys.some((k) => k.pubkey.equals(initiatorRepPda)));
-    assert.ok(createIx.keys.some((k) => k.pubkey.equals(HOLDFAST_PROGRAM_ID)));
+    assert.equal(createIx.data.length, 340);
+    const createPayload = decodeInitializeEscrowPayload(createIx.data);
+    assert.equal(createPayload.cursor, createIx.data.length);
+    assert.deepEqual(createPayload.escrowId, escrowIdBytes);
+    assert.equal(createPayload.beneficiary.toBase58(), beneficiary.publicKey.toBase58());
+    assert.equal(createPayload.arbiter.toBase58(), "11111111111111111111111111111111");
+    assert.equal(createPayload.escrowAmount, 1_000_000n);
+    assert.equal(createPayload.initiatorStake, 0n);
+    assert.equal(createPayload.beneficiaryStake, 0n);
+    assert.equal(createPayload.autoReleaseOnExpiry, true);
+    assert.equal(createPayload.slashLoserStake, false);
+    assert.equal(createPayload.disputeDeadlineSecs, 604800n);
+    assert.equal(createPayload.initiatorReputationMin, 6000n);
+    assert.equal(createPayload.beneficiaryReputationMin, 0n);
+    assert.equal(createPayload.initiatorMinTier, VerifTier.Attested);
+    assert.equal(createPayload.initiatorMinPacts, 2n);
+    assert.equal(createPayload.beneficiaryMinTier, 0);
+    assert.equal(createPayload.beneficiaryMinPacts, 0n);
+    assert.ok(createPayload.timeLockExpiresAt > 0n);
+    assert.equal(Buffer.compare(createPayload.deliverablesHash, Buffer.alloc(32, 0)), 0);
+    assert.equal(Buffer.compare(createPayload.deliverablesUri, Buffer.alloc(128, 0)), 0);
+
+    assert.equal(createIx.keys.length, 13);
+    assert.equal(createIx.keys[0].pubkey.toBase58(), initiator.publicKey.toBase58());
+    assert.equal(createIx.keys[1].pubkey.toBase58(), escrowPda.toBase58());
+    assert.equal(createIx.keys[2].pubkey.toBase58(), pactPda.toBase58());
+    assert.equal(createIx.keys[3].pubkey.toBase58(), mint.toBase58());
+    assert.equal(createIx.keys[4].pubkey.toBase58(), vault.toBase58());
+    assert.equal(createIx.keys[5].pubkey.toBase58(), initiatorRepPda.toBase58());
+    assert.equal(createIx.keys[6].pubkey.toBase58(), initiatorWallet.toBase58());
+    assert.equal(createIx.keys[7].pubkey.toBase58(), beneficiaryWallet.toBase58());
+    assert.equal(createIx.keys[8].pubkey.toBase58(), initiatorWallet.toBase58());
+    assert.equal(createIx.keys[9].pubkey.toBase58(), HOLDFAST_PROGRAM_ID.toBase58());
+    assert.equal(createIx.keys[10].pubkey.toBase58(), TOKEN_PROGRAM_ID.toBase58());
+    assert.equal(createIx.keys[11].pubkey.toBase58(), ASSOCIATED_TOKEN_PROGRAM_ID.toBase58());
+    assert.equal(createIx.keys[12].pubkey.toBase58(), "11111111111111111111111111111111");
 
     await initiatorSdk.depositEscrow(escrowId);
     const depositIx = conn.sent[1].tx.instructions[0];
@@ -257,6 +360,7 @@ describe("Escrow SDK lifecycle integration", async () => {
     const releaseIx = conn.sent[4].tx.instructions[0];
     assert.deepEqual(releaseIx.data, disc("release_escrow"));
     assert.ok(releaseIx.keys.some((k) => k.pubkey.equals(initiatorWallet)));
+    assert.ok(releaseIx.keys.some((k) => k.pubkey.equals(vault)));
 
     await beneficiarySdk.claimReleased(escrowId, initiator.publicKey);
     const claimIx = conn.sent[5].tx.instructions[0];
@@ -265,5 +369,135 @@ describe("Escrow SDK lifecycle integration", async () => {
     assert.ok(claimIx.keys.some((k) => k.pubkey.equals(beneficiaryRepPda)));
     assert.ok(claimIx.keys.some((k) => k.pubkey.equals(escrowAuthority)));
     assert.ok(claimIx.keys.some((k) => k.pubkey.equals(HOLDFAST_PROGRAM_ID)));
+  });
+
+  await test("createPact retries initialize_escrow with legacy-compatible payload on deserialize failure", async () => {
+    const initiator = Keypair.generate();
+    const beneficiary = Keypair.generate();
+    const initiatorWallet = Keypair.generate().publicKey;
+    const beneficiaryWallet = Keypair.generate().publicKey;
+    const mint = Keypair.generate().publicKey;
+
+    const escrowIdBytes = Buffer.alloc(32, 0x52);
+    const escrowPda = deriveEscrowPda(escrowIdBytes);
+    const pactPda = derivePactPda(escrowIdBytes);
+    const vault = deriveAta(escrowPda, mint);
+
+    const conn = new CompatFallbackConnection();
+    conn.setAccount(
+      escrowPda,
+      buildEscrowAccountData({
+        escrowId: escrowIdBytes,
+        initiator: initiator.publicKey,
+        beneficiary: beneficiary.publicKey,
+        arbiter: initiator.publicKey,
+        mint,
+        vault,
+        pactRecord: pactPda,
+        status: EscrowStatus.Pending,
+        disputeWindowEndsAt: 0n,
+      }),
+    );
+
+    const rep = {
+      async meetsRequirements() {
+        return true;
+      },
+    } as unknown as ReputationModule;
+
+    const sdk = new EscrowModule(
+      conn as unknown as Connection,
+      "http://indexer.test",
+      rep,
+      initiator,
+      initiatorWallet,
+      ESCROW_PROGRAM_ID,
+      HOLDFAST_PROGRAM_ID,
+    );
+
+    await sdk.createPact({
+      counterparty: beneficiary.publicKey,
+      counterpartyWallet: beneficiaryWallet,
+      mint,
+      amount: 1_000_000n,
+      releaseCondition: {
+        kind: "timed",
+        timeLockExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+      },
+      escrowId: escrowIdBytes,
+    });
+
+    assert.equal(conn.sent.length, 2);
+    const firstIx = conn.sent[0].tx.instructions[0];
+    const secondIx = conn.sent[1].tx.instructions[0];
+    assert.ok(secondIx.data.length < firstIx.data.length);
+    assert.deepEqual(secondIx.data.subarray(0, 8), disc("initialize_escrow"));
+  });
+
+  await test("createPact retries with intermediate legacy layout that still requires pact_record", async () => {
+    const initiator = Keypair.generate();
+    const beneficiary = Keypair.generate();
+    const initiatorWallet = Keypair.generate().publicKey;
+    const beneficiaryWallet = Keypair.generate().publicKey;
+    const mint = Keypair.generate().publicKey;
+
+    const escrowIdBytes = Buffer.alloc(32, 0x62);
+    const escrowPda = deriveEscrowPda(escrowIdBytes);
+    const pactPda = derivePactPda(escrowIdBytes);
+    const vault = deriveAta(escrowPda, mint);
+
+    const conn = new CompatFallbackConnectionThirdAttempt();
+    conn.setAccount(
+      escrowPda,
+      buildEscrowAccountData({
+        escrowId: escrowIdBytes,
+        initiator: initiator.publicKey,
+        beneficiary: beneficiary.publicKey,
+        arbiter: initiator.publicKey,
+        mint,
+        vault,
+        pactRecord: pactPda,
+        status: EscrowStatus.Pending,
+        disputeWindowEndsAt: 0n,
+      }),
+    );
+
+    const rep = {
+      async meetsRequirements() {
+        return true;
+      },
+    } as unknown as ReputationModule;
+
+    const sdk = new EscrowModule(
+      conn as unknown as Connection,
+      "http://indexer.test",
+      rep,
+      initiator,
+      initiatorWallet,
+      ESCROW_PROGRAM_ID,
+      HOLDFAST_PROGRAM_ID,
+    );
+
+    await sdk.createPact({
+      counterparty: beneficiary.publicKey,
+      counterpartyWallet: beneficiaryWallet,
+      mint,
+      amount: 1_000_000n,
+      releaseCondition: {
+        kind: "timed",
+        timeLockExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+      },
+      escrowId: escrowIdBytes,
+    });
+
+    assert.equal(conn.sent.length, 3);
+    const firstIx = conn.sent[0].tx.instructions[0];
+    const secondIx = conn.sent[1].tx.instructions[0];
+    const thirdIx = conn.sent[2].tx.instructions[0];
+    assert.ok(secondIx.data.length < firstIx.data.length);
+    assert.ok(thirdIx.data.length < secondIx.data.length);
+    assert.equal(thirdIx.keys.length, 13);
+    assert.equal(thirdIx.keys[2].pubkey.toBase58(), pactPda.toBase58());
+    assert.deepEqual(thirdIx.data.subarray(0, 8), disc("initialize_escrow"));
   });
 });

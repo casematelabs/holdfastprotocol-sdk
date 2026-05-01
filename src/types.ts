@@ -216,3 +216,31 @@ export interface ListPactsOptions {
   /** Pagination cursor from a previous `PactPage`. */
   before?: string;
 }
+
+/** One escrow lifecycle event from the indexer. */
+export interface EscrowEventEntry {
+  kind: string;
+  slot: number;
+  signature: string;
+  timestamp: number;
+  /** Gross claim amount at claim-time (beneficiary + protocol fee). */
+  grossAmount?: string;
+  /** Protocol fee amount charged at claim-time. */
+  protocolFeeAmount?: string;
+  /** Beneficiary net amount paid at claim-time. */
+  beneficiaryNetAmount?: string;
+}
+
+export interface EscrowEventPage {
+  events: EscrowEventEntry[];
+  total: number;
+  hasMore: boolean;
+  cursor?: string;
+}
+
+export interface GetEscrowEventsOptions {
+  /** Number of events to return. Default: 50. Max: 200. */
+  limit?: number;
+  /** Pagination cursor from a previous `EscrowEventPage`. */
+  before?: string;
+}

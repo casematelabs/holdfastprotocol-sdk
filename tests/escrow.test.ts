@@ -16,6 +16,7 @@ import {
   EscrowAccountCorruptError,
   EscrowSignerRequiredError,
   EscrowAgentWalletRequiredError,
+  EscrowLockArbiterWalletRequiredError,
   DisputeWindowStillOpenError,
   ReputationThresholdNotMet,
 } from "../src/escrow/index.js";
@@ -24,7 +25,7 @@ import { ReputationModule } from "../src/reputation/index.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const DEVNET_ESCROW_PROGRAM_ID = new PublicKey("BNxA76z6vjQYtUJXGpH8qjA3wHvtAAqGqL6rvVWH6b3H");
+const DEVNET_ESCROW_PROGRAM_ID = new PublicKey("CAZMkHiExVjbsSwAVBYVhz1yaHmnBSvzUYGaQrrRp6yi");
 const DEVNET_HOLDFAST_PROGRAM_ID = new PublicKey("D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg");
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bL");
@@ -523,6 +524,51 @@ describe("EscrowModule signer/wallet guard errors", async () => {
   });
 });
 
+describe("EscrowModule.lockEscrow arbiter wallet contract", async () => {
+  const escrowId = new PublicKey(Buffer.alloc(32, 0x33));
+  const fakeSigner = {
+    publicKey: TEST_PUBKEY_A,
+    secretKey: new Uint8Array(64),
+  };
+  const fakeAgentWallet = TEST_PUBKEY_B;
+
+  await test("requires arbiterWallet when escrow has an explicit arbiter", async () => {
+    const explicitArbiter = new PublicKey("11111111111111111111111111111112");
+    const buf = makeEscrowBuf({ arbiter: explicitArbiter });
+    const mod = new EscrowModule(
+      mockConn(buf),
+      INDEXER_URL,
+      makeRepModule(),
+      fakeSigner,
+      fakeAgentWallet,
+    );
+
+    await assert.rejects(
+      mod.buildLockEscrowTransaction(escrowId, TEST_PUBKEY_C),
+      (err: unknown) => {
+        assert.ok(err instanceof EscrowLockArbiterWalletRequiredError);
+        assert.equal(err.arbiterPubkey, explicitArbiter.toBase58());
+        return true;
+      },
+    );
+  });
+
+  await test("falls back to initiator agentWallet when escrow arbiter is zero pubkey", async () => {
+    const buf = makeEscrowBuf({ arbiter: ZERO_PUBKEY });
+    const mod = new EscrowModule(
+      mockConn(buf),
+      INDEXER_URL,
+      makeRepModule(),
+      fakeSigner,
+      fakeAgentWallet,
+    );
+
+    const tx = await mod.buildLockEscrowTransaction(escrowId, TEST_PUBKEY_C);
+    const lockIx = tx.instructions[0];
+    assert.equal(lockIx.keys[5].pubkey.toBase58(), fakeAgentWallet.toBase58());
+  });
+});
+
 // ── claimReleased dispute window check ────────────────────────────────────
 
 describe("EscrowModule.claimReleased — dispute window guard", async () => {
@@ -654,6 +700,83 @@ describe("EscrowModule.listPacts", async () => {
       () => mod.listPacts(TEST_PUBKEY_A.toBase58()),
     );
     assert.ok(capturedUrl.includes(TEST_PUBKEY_A.toBase58()));
+  });
+});
+
+describe("EscrowModule.getEscrowEvents", async () => {
+  const mod = new EscrowModule(mockConn(null), INDEXER_URL, makeRepModule());
+
+  await test("returns EscrowEventPage on 200 response", async () => {
+    const page = {
+      events: [
+        {
+          kind: "claimed",
+          slot: 123,
+          signature: "sig123",
+          timestamp: 1700000000,
+          grossAmount: "1050",
+          protocolFeeAmount: "25",
+          beneficiaryNetAmount: "1025",
+        },
+      ],
+      total: 1,
+      hasMore: false,
+    };
+    const result = await withFetch(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => page,
+          text: async () => "",
+        }) as unknown as Response,
+      () => mod.getEscrowEvents(TEST_PUBKEY_A),
+    );
+    assert.deepEqual(result, page);
+  });
+
+  await test("caps limit at 200 when caller passes higher value", async () => {
+    let capturedUrl = "";
+    await withFetch(
+      async (url) => {
+        capturedUrl = String(url);
+        return {
+          ok: true,
+          json: async () => ({ events: [], total: 0, hasMore: false }),
+          text: async () => "",
+        } as unknown as Response;
+      },
+      () => mod.getEscrowEvents(TEST_PUBKEY_A, { limit: 500 }),
+    );
+    assert.ok(capturedUrl.includes("limit=200"), `expected limit=200, got: ${capturedUrl}`);
+  });
+
+  await test("passes before cursor to indexer URL when set", async () => {
+    let capturedUrl = "";
+    await withFetch(
+      async (url) => {
+        capturedUrl = String(url);
+        return {
+          ok: true,
+          json: async () => ({ events: [], total: 0, hasMore: false }),
+          text: async () => "",
+        } as unknown as Response;
+      },
+      () => mod.getEscrowEvents(TEST_PUBKEY_A, { before: "cursor-xyz" }),
+    );
+    assert.ok(capturedUrl.includes("before=cursor-xyz"), `expected cursor in URL, got: ${capturedUrl}`);
+  });
+
+  await test("throws IndexerRequestError on non-2xx response", async () => {
+    await withFetch(
+      async () =>
+        ({
+          ok: false,
+          status: 503,
+          text: async () => "Service Unavailable",
+        }) as unknown as Response,
+      () => assert.rejects(mod.getEscrowEvents(TEST_PUBKEY_A)),
+    );
   });
 });
 

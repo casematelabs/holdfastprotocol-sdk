@@ -1,5 +1,9 @@
 # @holdfastprotocol/sdk
 
+[![npm version](https://img.shields.io/npm/v/@holdfastprotocol/sdk?tag=devnet)](https://www.npmjs.com/package/@holdfastprotocol/sdk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Network: Devnet](https://img.shields.io/badge/network-devnet-orange)](#program-ids-devnet)
+
 TypeScript SDK for the Holdfast Protocol — trust infrastructure for autonomous AI agents on Solana.
 
 ## What is Holdfast?
@@ -34,6 +38,19 @@ The `devnet` dist-tag points to the current devnet release. `latest` is intentio
 
 ## Quick start
 
+Canonical onboarding script:
+
+- [`examples/quickstart.ts`](./examples/quickstart.ts) — runnable end-to-end devnet script
+
+Run the first supported devnet escrow path:
+
+```bash
+KEYPAIR_PATH=~/.config/solana/devnet.json \
+npx ts-node --esm examples/quickstart.ts
+```
+
+The script covers the initial path end-to-end: `registerAgentWallet()` -> `createPact()` -> `getPact()`.
+
 ```typescript
 import { createHoldfastClient } from '@holdfastprotocol/sdk';
 import { Keypair } from '@solana/web3.js';
@@ -42,7 +59,7 @@ const client = createHoldfastClient(); // defaults to devnet
 
 const agentPubkey = Keypair.generate().publicKey;
 
-// Check reputation (returns false for unregistered agents)
+// Check reputation (returns false when no ReputationAccount exists yet)
 const qualified = await client.reputation.meetsRequirements(agentPubkey, {
   minScore: 5000, // neutral or above
   minPacts: 3,
@@ -51,7 +68,36 @@ const qualified = await client.reputation.meetsRequirements(agentPubkey, {
 console.log('Agent qualified:', qualified);
 ```
 
-See [`examples/quickstart.ts`](./examples/quickstart.ts) for a runnable end-to-end script.
+For CI/runtime parity checks, run:
+
+```bash
+node --import tsx/esm --test tests/quickstart-parity.ci.test.ts
+```
+
+For the deterministic terminal-state lifecycle proof (`createPact` → `claimReleased`) in a controllable test environment, run:
+
+```bash
+npm run verify:lifecycle
+```
+
+For a real devnet `createPact` smoke path, run:
+
+```bash
+node --import tsx/esm scripts/cas27-createpact-smoke.ts
+```
+
+Smoke prerequisites:
+- Local keypairs at `~/.config/solana/agent-a.json`, `~/.config/solana/agent-b.json`, and `~/.config/solana/devnet.json`
+- Distinct public keys for each role
+- At least `0.1` SOL per signer (the script attempts airdrop retries and then prints manual funding guidance)
+
+For the broader live devnet release-path smoke with persisted Holdfast identities, run:
+
+```bash
+node --import tsx/esm scripts/cas2-full-lifecycle-explicit-arbiter.ts
+```
+
+This script stores and reuses Holdfast identity files in `~/.config/solana/*.holdfast.json` so repeated runs exercise stable `AgentWallet` identity instead of re-registering fresh wallets every time.
 
 ---
 
@@ -64,6 +110,8 @@ One-time agent identity setup. No Anchor required — pure `@solana/web3.js`.
 #### `registerAgentWallet(params)`
 
 Registers an AgentWallet PDA on the holdfast program. Generates a secp256r1 keypair, builds the SIMD-48 precompile instruction, and submits both in a single transaction. Idempotent — if the PDA already exists, returns immediately without sending a transaction.
+
+This call does **not** create a `ReputationAccount`. Reputation remains uninitialized until you explicitly run `init_reputation`.
 
 ```typescript
 import { registerAgentWallet } from '@holdfastprotocol/sdk';
@@ -127,11 +175,11 @@ console.log('Pacts:', rep.totalPacts);  // lifetime completed pacts
 console.log('Disputes:', rep.disputeCount);
 ```
 
-Throws `ReputationNotFoundError` if the agent has no account yet. Accounts are created at first pact sign.
+Throws `ReputationNotFoundError` if the agent has no account yet. Initialize the account explicitly via `init_reputation` before calling `get`.
 
 #### `reputation.meetsRequirements(agentPubkey, requirements)`
 
-Pre-flight check that mirrors the on-chain `validate_reputation_for_pact` logic. Returns `false` (not throws) for unregistered agents.
+Pre-flight check that mirrors the on-chain `validate_reputation_for_pact` logic. Returns `false` (not throws) when the agent has no `ReputationAccount` yet.
 
 ```typescript
 const ok = await client.reputation.meetsRequirements(agentPubkey, {
@@ -166,7 +214,7 @@ const page = await client.reputation.getHistory(agentPubkey, { limit: 20 });
 
 ### `escrow`
 
-TypeScript SDK surface for the `holdfast-escrow` program (devnet program ID: `BNxA76z6vjQYtUJXGpH8qjA3wHvtAAqGqL6rvVWH6b3H`, deployed per CAS-54).
+TypeScript SDK surface for the `holdfast-escrow` program. The devnet program ID is listed under [Program IDs (devnet)](#program-ids-devnet).
 
 Write methods require `signer` and, where noted, `agentWallet` in client options. Read methods (`getPact`, `listPacts`) work without a signer.
 
@@ -273,7 +321,16 @@ const unsignedTx = await client.escrow.buildLockEscrowTransaction(
 
 #### `escrow.claimReleased(escrowId, initiatorPubkey)`
 
-Transfers `escrow_amount + beneficiary_stake` to the beneficiary, returns `initiator_stake` to the initiator, and awards both parties +50 reputation bp (`Fulfilled`). Status advances to `Claimed`.
+Finalizes claim-time settlement and is the **only** place protocol fees are charged in v1.
+
+- Fee rate: **25 bps** (0.25%) on `escrow_amount` only.
+- Formula: `fee = floor(escrow_amount * 25 / 10_000)`.
+- Beneficiary payout: `beneficiary_net = escrow_amount + beneficiary_stake - fee`.
+- Initiator payout: `initiator_stake` is returned unchanged.
+
+No protocol fees are charged on refunds, cancellations, disputes, or non-escrow paths in v1.
+
+On success, both parties receive +50 reputation bp (`Fulfilled`) and status advances to `Claimed`.
 
 The SDK pre-flights the dispute window — throws `DisputeWindowStillOpenError` before sending any transaction if `disputeWindowEndsAt` has not elapsed.
 
@@ -309,6 +366,22 @@ const page = await client.escrow.listPacts(agentPubkey, {
 // page.cursor?: string  — pass as `before` for the next page
 ```
 
+#### `escrow.getEscrowEvents(escrowId, opts?)`
+
+Fetches lifecycle events for one escrow from the off-chain indexer.
+
+Claim events surface fee accounting fields:
+- `grossAmount` (`beneficiaryNetAmount + protocolFeeAmount`)
+- `protocolFeeAmount`
+- `beneficiaryNetAmount`
+
+```typescript
+const events = await client.escrow.getEscrowEvents(escrowId, { limit: 20 });
+// events.events: EscrowEventEntry[]
+// events.hasMore: boolean
+// events.cursor?: string
+```
+
 #### Escrow error types
 
 | Class | When thrown |
@@ -319,7 +392,7 @@ const page = await client.escrow.listPacts(agentPubkey, {
 | `EscrowAgentWalletRequiredError` | `createPact`/`releasePact` called without `agentWallet` in client options |
 | `ReputationThresholdNotMet` | Pre-flight reputation check failed before `createPact` |
 | `DisputeWindowStillOpenError` | `claimReleased` pre-flight — dispute window has not yet elapsed |
-| `IndexerRequestError` | Indexer returned a non-2xx response (from `listPacts`) |
+| `IndexerRequestError` | Indexer returned a non-2xx response (from `listPacts` / `getEscrowEvents`) |
 
 ---
 
@@ -366,24 +439,11 @@ import { VerifTier, PactOutcome } from '@holdfastprotocol/sdk';
 
 | Program | Address |
 |---|---|
-| `holdfast` | `D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg` |
-| `holdfast-escrow` | `BNxA76z6vjQYtUJXGpH8qjA3wHvtAAqGqL6rvVWH6b3H` |
-
----
-
-## Further Reading
-
-| Guide | What it covers |
-|---|---|
-| [Developer Quickstart](../docs/quickstart.md) | Zero to first confirmed on-chain pact in ~15 minutes |
-| [Integration Guide](../docs/integration-guide.md) | Program addresses, PDA derivations, IDL access |
-| [ElizaOS Integration](../docs/elizaos-integration-guide.md) | Plug the Holdfast plugin into an ElizaOS agent |
-| [Solana Agent Kit Integration](../docs/sak-integration-guide.md) | Add Holdfast actions to a SAK agent |
-| [Reputation Composability](../docs/reputation-composability.md) | Gate your protocol on Holdfast reputation (off-chain SDK + on-chain CPI) |
-| [Troubleshooting Reference](../docs/troubleshooting.md) | Error codes, SDK exceptions, and recovery paths |
+| `holdfast` | `2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq` |
+| `holdfast-escrow` | `CAZMkHiExVjbsSwAVBYVhz1yaHmnBSvzUYGaQrrRp6yi` |
 
 ---
 
 ## License
 
-Apache-2.0
+[MIT](./LICENSE)

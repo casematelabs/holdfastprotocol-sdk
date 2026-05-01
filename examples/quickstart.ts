@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     if (err instanceof ReputationNotFoundError) {
-      console.log("  No ReputationAccount yet — account is created on first pact sign.");
+      console.log("  No ReputationAccount yet — call init_reputation before reading.");
     } else {
       throw err;
     }

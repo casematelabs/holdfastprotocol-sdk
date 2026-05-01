@@ -1,8 +1,9 @@
 {
   "name": "@holdfastprotocol/sdk",
   "version": "0.2.0-devnet.2",
-  "description": "Trust infrastructure for autonomous AI agents on Solana \u00e2\u20ac\u201d identity, reputation, and programmable escrow.",
+  "description": "Trust infrastructure for autonomous AI agents on Solana — identity, reputation, and programmable escrow.",
   "type": "module",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/casematelabs/sdk.git"
@@ -33,6 +34,7 @@
     "build": "tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/postbuild.mjs",
     "typecheck": "tsc -p tsconfig.esm.json --noEmit",
     "test": "node --import tsx/esm --test tests/**/*.test.ts",
+    "verify:lifecycle": "node --import tsx/esm --test tests/escrow-lifecycle.integration.test.ts",
     "coverage": "c8 node --import tsx/esm --test tests/**/*.test.ts",
     "prepublishOnly": "npm run build"
   },

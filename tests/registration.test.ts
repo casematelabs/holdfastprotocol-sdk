@@ -306,6 +306,19 @@ describe("Registration preimage", async () => {
     const hash = createHash("sha256").update(preimage).digest();
     assert.doesNotThrow(() => p256.sign(hash, priv));
   });
+
+  await test("p256.sign output resolves to a 64-byte compact signature", () => {
+    const priv = new Uint8Array(32).fill(0x22);
+    const msg = Buffer.from("holdfast-registration-signature-shape");
+    const sig = p256.sign(msg, priv) as
+      | Uint8Array
+      | { toCompactRawBytes: () => Uint8Array };
+    const compact =
+      sig instanceof Uint8Array
+        ? sig
+        : sig.toCompactRawBytes();
+    assert.equal(compact.length, 64);
+  });
 });
 
 // ── Register instruction Borsh encoding ───────────────────────────────────

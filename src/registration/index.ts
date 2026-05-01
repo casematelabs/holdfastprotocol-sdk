@@ -25,7 +25,7 @@ const SYSVAR_INSTRUCTIONS_PUBKEY = new PublicKey(
 );
 
 const DEVNET_HOLDFAST_PROGRAM_ID = new PublicKey(
-  "D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg",
+  "2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq",
 );
 
 // sha256("global:register_agent_wallet")[0..8]
@@ -94,12 +94,12 @@ export function deriveAgentWalletPda(
 
 function buildSecp256r1Instruction(
   sig: Uint8Array,
-  compressedPubkey: Uint8Array,
+  pubkey: Uint8Array,
   message: Buffer,
 ): TransactionInstruction {
   const SIG_OFFSET = 16;
   const PUBKEY_OFFSET = SIG_OFFSET + 64;
-  const MSG_OFFSET = PUBKEY_OFFSET + 33;
+  const MSG_OFFSET = PUBKEY_OFFSET + pubkey.length;
   const data = Buffer.alloc(MSG_OFFSET + message.length);
   data[0] = 1; // num_signatures
   data[1] = 0; // padding
@@ -111,7 +111,7 @@ function buildSecp256r1Instruction(
   data.writeUInt16LE(message.length, 12);
   data.writeUInt16LE(0xffff, 14); // msg_instruction_index = current ix
   Buffer.from(sig).copy(data, SIG_OFFSET);
-  Buffer.from(compressedPubkey).copy(data, PUBKEY_OFFSET);
+  Buffer.from(pubkey).copy(data, PUBKEY_OFFSET);
   message.copy(data, MSG_OFFSET);
   return new TransactionInstruction({
     programId: SECP256R1_PROGRAM_ID,
@@ -202,10 +202,19 @@ export async function registerAgentWallet(
     pubkeyY,
   ]);
   const preimageHash = createHash("sha256").update(preimage).digest();
-  const sigBytes = p256.sign(preimageHash, privKey) as unknown as Uint8Array;
+  // noble return type differs across package versions/workspaces:
+  // - Uint8Array(64) in newer builds
+  // - Signature object with toCompactRawBytes() in older builds
+  const signed = p256.sign(preimageHash, privKey) as
+    | Uint8Array
+    | { toCompactRawBytes: () => Uint8Array };
+  const sigBytes =
+    signed instanceof Uint8Array
+      ? signed
+      : signed.toCompactRawBytes();
 
-  // Devnet secp256r1 precompile (Agave 2.x) takes the pre-hashed message
-  // directly — it does NOT hash msg_data internally. Pass the 32-byte hash.
+  // Devnet secp256r1 precompile path accepts the 32-byte challenge digest
+  // (sha256(preimage)) as the message payload for verification.
   const secp256r1Ix = buildSecp256r1Instruction(
     sigBytes,
     compressedPubkey,
