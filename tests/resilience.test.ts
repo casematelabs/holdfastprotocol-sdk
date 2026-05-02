@@ -191,7 +191,7 @@ describe("ReputationModule.getHistoryWithFallback", async () => {
         data: repBuf,
         executable: false,
         lamports: 1_000_000,
-        owner: new PublicKey("D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg"),
+        owner: new PublicKey("2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq"),
         rentEpoch: 0,
       }),
     });

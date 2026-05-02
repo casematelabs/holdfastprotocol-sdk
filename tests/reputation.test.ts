@@ -21,7 +21,7 @@ import { VerifTier, PactOutcome } from "../src/types.js";
 const REPUTATION_DISCRIMINATOR = Buffer.from([19, 185, 177, 157, 34, 87, 67, 233]);
 const ACCOUNT_SIZE = 512;
 const HIST_ENTRY_SIZE = 18;
-const HOLDFAST_PROGRAM_ID = new PublicKey("D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg");
+const HOLDFAST_PROGRAM_ID = new PublicKey("2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq");
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 

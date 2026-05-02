@@ -20,7 +20,7 @@ import { p256 } from "@noble/curves/nist.js";
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const DEVNET_HOLDFAST_PROGRAM_ID = new PublicKey(
-  "D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg",
+  "2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq",
 );
 
 // sha256("global:register_agent_wallet")[0..8]

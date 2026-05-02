@@ -57,7 +57,7 @@ export interface HoldfastClientOptions {
   escrowProgramId?: PublicKey;
   /**
    * Override the holdfast program ID. Defaults to the devnet deployment
-   * (D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg).
+   * (2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq).
    */
   holdfastProgramId?: PublicKey;
 }

@@ -13,7 +13,7 @@ import { EscrowStatus, VerifTier } from "../src/types.js";
 import type { ReputationModule } from "../src/reputation/index.js";
 
 const ESCROW_PROGRAM_ID = new PublicKey("BNxA76z6vjQYtUJXGpH8qjA3wHvtAAqGqL6rvVWH6b3H");
-const HOLDFAST_PROGRAM_ID = new PublicKey("D6mUa4wGtFyLyJorMfxoKvA9ybohjUSsfw88t66ATxg");
+const HOLDFAST_PROGRAM_ID = new PublicKey("2chF47DbqehX3L38874e2RznaSs46vpcMPEPRYz4Dywq");
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
