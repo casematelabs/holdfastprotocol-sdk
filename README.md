@@ -444,6 +444,13 @@ import { VerifTier, PactOutcome } from '@holdfastprotocol/sdk';
 
 ---
 
+## Documentation
+
+- [Quickstart](./docs/quickstart.md) — zero to first confirmed devnet pact in ~15 minutes
+- [Troubleshooting](./docs/troubleshooting.md) — error codes, SDK exceptions, recovery paths
+
+---
+
 ## License
 
 [MIT](./LICENSE)
